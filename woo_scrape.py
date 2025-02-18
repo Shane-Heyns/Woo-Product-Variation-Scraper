@@ -16,9 +16,15 @@ def get_product_links(page):
 def extract_categories(r):
     categories = []
     breadcrumb_items = r.html.find('.woocommerce-breadcrumb span a')
+
     if breadcrumb_items:
-        for item in breadcrumb_items[1:-1]:
-            categories.append(item.full_text.strip())
+        num_items = len(breadcrumb_items)
+        if num_items > 2:
+            for item in breadcrumb_items[1:]:
+                categories.append(item.full_text.strip())
+        elif num_items == 2:
+            categories.append(breadcrumb_items[1].full_text.strip())
+
     return ' > '.join(categories)
 
 def extract_images(r):
@@ -30,50 +36,8 @@ def extract_images(r):
         except KeyError:
             print("Image src attribute not found")
             continue
-    return ', '.join(image_list)
 
-def extract_variations(r, parent_sku):
-    variations = []
-    
-    # Extract color variations
-    color_elements = r.html.find('span.wd-swatch-text')
-    colors = [color.full_text.strip() for color in color_elements]
-    
-    # Extract size variations
-    size_element = r.html.find('select#pa_size', first=True)
-    sizes = []
-    if size_element:
-        size_options = size_element.find('option')
-        sizes = [option.full_text.strip() for option in size_options if option.attrs.get('value')]
-    
-    # Generate variations
-    for color in colors:
-        for size in sizes:
-            variation_sku = f"{parent_sku}-{color[0].upper()}-{size}"
-            variation = {
-                'Type': 'variation',
-                'SKU': variation_sku,
-                'Name': '',  # Variation name can be left empty or derived from parent
-                'Weight (kg)': '',
-                'Length (cm)': '',
-                'Width (cm)': '',
-                'Height (cm)': '',
-                'Description': '',  # Variations inherit parent description
-                'Categories': '',  # Variations inherit parent categories
-                'Images': '',  # Variations inherit parent images
-                'Parent': parent_sku,
-                'Attribute 1 name': 'Color',
-                'Attribute 1 value(s)': color,
-                'Attribute 1 visible': '1',
-                'Attribute 1 global': '1',
-                'Attribute 2 name': 'Size',
-                'Attribute 2 value(s)': size,
-                'Attribute 2 visible': '1',
-                'Attribute 2 global': '1',
-            }
-            variations.append(variation)
-    
-    return variations
+    return ', '.join(image_list)
 
 def parse_product(url):
     r = s.get(url)
@@ -83,18 +47,15 @@ def parse_product(url):
         sku = r.html.find('span.sku', first=True).full_text.strip()
     except AttributeError:
         sku = ''
-    
     categories = extract_categories(r)
     images = extract_images(r)
-    
-    # Check if the product has variations
-    variations = []
-    if r.html.find('select#pa_size', first=True) and r.html.find('span.wd-swatch-text', first=True):
-        variations = extract_variations(r, sku)
-    
-    # Create parent product
-    parent_product = {
-        'Type': 'parent',
+    try:
+        brands = r.html.find('div.wd-product-brands', first=True).full_text.strip()
+    except AttributeError:
+        brands = ''
+
+    product_data = {
+        'Type': 'variable',  # Parent product is 'variable'
         'SKU': sku,
         'Name': title,
         'Weight (kg)': '',
@@ -104,34 +65,136 @@ def parse_product(url):
         'Description': product_desc.strip(),
         'Categories': categories,
         'Images': images,
+        'Brands': brands,
         'Parent': '',
-        'Attribute 1 name': '',
+        'Attribute 1 name': 'Color',
         'Attribute 1 value(s)': '',
-        'Attribute 1 visible': '',
-        'Attribute 1 global': '',
-        'Attribute 2 name': '',
+        'Attribute 1 visible': '1',
+        'Attribute 1 global': '1',
+        'Attribute 2 name': 'Size',
         'Attribute 2 value(s)': '',
-        'Attribute 2 visible': '',
-        'Attribute 2 global': '',
+        'Attribute 2 visible': '1',
+        'Attribute 2 global': '1',
     }
-    
-    # Return parent product and variations
-    return [parent_product] + variations
+
+    products = [product_data]
+
+    color_options = [option.attrs['value'] for option in r.html.find('.product-image-summary-wrap #pa_color option') if option.attrs.get('value') != ""]
+    size_options = [option.attrs['value'] for option in r.html.find('.product-image-summary-wrap #pa_size option') if option.attrs.get('value') != ""]
+
+    if color_options and size_options:
+        for color in color_options:
+            for size in size_options:
+                variation_sku = f"{sku}-{color[0].upper()}-{size}"
+                variation_name = f"{title} - {color} - {size}"
+                variation = {
+                    'Type': 'variation',  # Variation is 'variation'
+                    'SKU': variation_sku,
+                    'Name': variation_name,
+                    'Weight (kg)': '',
+                    'Length (cm)': '',
+                    'Width (cm)': '',
+                    'Height (cm)': '',
+                    'Description': '',
+                    'Categories': categories,
+                    'Images': images,
+                    'Brands': brands,
+                    'Parent': sku,
+                    'Attribute 1 name': 'Color',
+                    'Attribute 1 value(s)': color,
+                    'Attribute 1 visible': '1',
+                    'Attribute 1 global': '1',
+                    'Attribute 2 name': 'Size',
+                    'Attribute 2 value(s)': size,
+                    'Attribute 2 visible': '1',
+                    'Attribute 2 global': '1',
+                }
+                products.append(variation)
+
+    elif color_options and not size_options:
+        for color in color_options:
+            variation_sku = f"{sku}-{color[0].upper()}"
+            variation_name = f"{title} - {color}"
+            variation = {
+                'Type': 'variation',  # Variation is 'variation'
+                'SKU': variation_sku,
+                'Name': variation_name,
+                'Weight (kg)': '',
+                'Length (cm)': '',
+                'Width (cm)': '',
+                'Height (cm)': '',
+                'Description': '',
+                'Categories': categories,
+                'Images': images,
+                'Brands': brands,
+                'Parent': sku,
+                'Attribute 1 name': 'Color',
+                'Attribute 1 value(s)': color,
+                'Attribute 1 visible': '1',
+                'Attribute 1 global': '1',
+                'Attribute 2 name': 'Size',
+                'Attribute 2 value(s)': '',
+                'Attribute 2 visible': '1',
+                'Attribute 2 global': '1',
+            }
+            products.append(variation)
+
+    elif not color_options and size_options:
+        for size in size_options:
+            variation_sku = f"{sku}--{size}"
+            variation_name = f"{title} - {size}"
+            variation = {
+                'Type': 'variation',  # Variation is 'variation'
+                'SKU': variation_sku,
+                'Name': variation_name,
+                'Weight (kg)': '',
+                'Length (cm)': '',
+                'Width (cm)': '',
+                'Height (cm)': '',
+                'Description': '',
+                'Categories': categories,
+                'Images': images,
+                'Brands': brands,
+                'Parent': sku,
+                'Attribute 1 name': 'Color',
+                'Attribute 1 value(s)': '',
+                'Attribute 1 visible': '1',
+                'Attribute 1 global': '1',
+                'Attribute 2 name': 'Size',
+                'Attribute 2 value(s)': size,
+                'Attribute 2 visible': '1',
+                'Attribute 2 global': '1',
+            }
+            products.append(variation)
+
+    else:
+        product_data['Type'] = 'simple'
+        return products
+
+    return products
 
 def save_csv(results):
-    keys = results[0].keys()
-    with open('woo_products.csv', 'w', newline='', encoding='utf-8') as f:
-        dict_writer = csv.DictWriter(f, keys)
-        dict_writer.writeheader()
-        dict_writer.writerows(results)
+    all_products = []
+    for product_list in results:
+        all_products.extend(product_list)
+
+    if all_products:
+        keys = all_products[0].keys()
+        with open('woo_products.csv', 'w', newline='') as f:
+            dict_writer = csv.DictWriter(f, keys)
+            dict_writer.writeheader()
+            dict_writer.writerows(all_products)
+    else:
+        print("No products found to save.")
 
 def main():
     results = []
-    for x in range(232, 233):  # Adjust the page range as needed
+    #how many pages must it go through for 232 pages range will be (1, 233)
+    for x in range(235, 236):
         print('Getting Page:', x)
         urls = get_product_links(x)
         for url in urls:
-            results.extend(parse_product(url))
+            results.append(parse_product(url))
         print('Total Results: ', len(results))
     save_csv(results)
 
